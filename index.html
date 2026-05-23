@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>이랜드크루즈 — 한강 유람선 게임</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#071520;
+  display:flex; flex-direction:column;
+  justify-content:center; align-items:center;
+  min-height:100vh; overflow:hidden;
+  font-family:'Malgun Gothic','맑은 고딕','Apple SD Gothic Neo',sans-serif;
+}
+#c { display:block; cursor:default; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ═══════════════════════════════════════════
+//  CANVAS SETUP
+// ═══════════════════════════════════════════
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 900, H = 580;
+canvas.width = W; canvas.height = H;
+
+function resize() {
+  const s = Math.min(window.innerWidth/W, window.innerHeight/H);
+  canvas.style.width  = Math.floor(W*s)+'px';
+  canvas.style.height = Math.floor(H*s)+'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ═══════════════════════════════════════════
+//  REAL PHOTO LOADING (Wikimedia Commons CC-BY)
+// ═══════════════════════════════════════════
+const PHOTO_URLS = {
+  // Han River panoramic view — for scrolling river background
+  river:   'https://upload.wikimedia.org/wikipedia/commons/9/97/Han_River_Seoul_-_panoramio.jpg',
+  // Yeouido skyline with Han River railway bridge
+  skyline: 'https://upload.wikimedia.org/wikipedia/commons/a/a1/Cityscape_of_Yeouido_skyscrapers_and_Hangang_Railway_Bridge_20240501113854.jpg',
+  // Yeouido Hangang Park from Mapo Bridge — riverside greenery
+  park:    'https://upload.wikimedia.org/wikipedia/commons/3/3a/Yeouido_Hangang_Park_from_Mapo_Bridge_1.jpg',
+  // Hangang water bus (실제 한강 선박) — player / enemy ship texture
+  boat1:   'https://upload.wikimedia.org/wikipedia/commons/5/56/Hangang_Bus_Yeouido_%2808%29.jpg',
+  boat2:   'https://upload.wikimedia.org/wikipedia/commons/8/8d/Hangang_Bus_Yeouido_%2810%29.jpg',
+  // Namdae stream colorful clouds reflection — water/sky texture
+  water:   'https://upload.wikimedia.org/wikipedia/commons/c/ce/Namdae_stream_water_reflection_of_colorful_clouds_from_Wolhwagyo_bridge_in_Gangneung_South_Korea.jpg'
+};
+
+const IMGS = {};
+let loadedCount = 0;
+const totalPhotos = Object.keys(PHOTO_URLS).length;
+
+function loadAllImages() {
+  return Promise.all(
+    Object.entries(PHOTO_URLS).map(([key, url]) =>
+      new Promise(resolve => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload  = () => { IMGS[key] = img; loadedCount++; resolve(); };
+        img.onerror = () => { loadedCount++; resolve(); }; // graceful fallback
+        img.src = url;
+      })
+    )
+  );
+}
+
+// ═══════════════════════════════════════════
+//  LAYOUT
+// ═══════════════════════════════════════════
+const HUD_H = 54;
+const SKY_H = 68;
+const BANK_B = 72;
+const RT = HUD_H + SKY_H;   // river top
+const RB = H  - BANK_B;     // river bottom
+const RH = RB - RT;         // river height
+
+// ═══════════════════════════════════════════
+//  SPARKLE SYSTEM
+// ═══════════════════════════════════════════
+const SPARKS = Array.from({length:180}, () => ({
+  x: Math.random()*W,
+  y: RT + Math.random()*RH,
+  ph: Math.random()*Math.PI*2,
+  sp: 0.016 + Math.random()*0.038,
+  sz: 0.8 + Math.random()*1.6
+}));
+
+// ═══════════════════════════════════════════
+//  GAME STATE
+// ═══════════════════════════════════════════
+const GS = {LOADING:0, MENU:1, PLAY:2, PAUSE:3, DEAD:4, WIN:5};
+let gs = GS.LOADING;
+let diff = 'easy';
+
+const DIFF = {
+  easy:   {spd:1.4, si:135, mo:4,  dpf:0.026, hm:0.50, types:['rock','rock','ship']},
+  medium: {spd:2.6, si:88,  mo:7,  dpf:0.052, hm:0.57, types:['rock','ship','ship']},
+  hard:   {spd:4.2, si:52,  mo:11, dpf:0.085, hm:0.63, types:['rock','ship','big']}
+};
+
+let lives, score, dist, spawnT, frame, sMult;
+let invinc, invT;
+let obs=[], parts=[], notes=[];
+let bgX=0, wT=0, nLM=0;
+
+const PL = {x:140, y:0, vx:0, vy:0, w:96, h:34, spd:5.5};
+
+// ═══════════════════════════════════════════
+//  INPUT
+// ═══════════════════════════════════════════
+const K = {};
+window.addEventListener('keydown', e=>{
+  K[e.code]=true;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+  if(e.code==='Escape'){
+    if(gs===GS.PLAY) gs=GS.PAUSE;
+    else if(gs===GS.PAUSE) gs=GS.PLAY;
+  }
+});
+window.addEventListener('keyup', e=>K[e.code]=false);
+
+let tVX=0, tVY=0, tLX=0, tLY=0;
+canvas.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  if(gs!==GS.PLAY){handleClick(e.touches[0]);return;}
+  tLX=e.touches[0].clientX; tLY=e.touches[0].clientY;
+},{passive:false});
+canvas.addEventListener('touchmove', e=>{
+  e.preventDefault();
+  tVX=(e.touches[0].clientX-tLX)*0.22;
+  tVY=(e.touches[0].clientY-tLY)*0.22;
+  tLX=e.touches[0].clientX; tLY=e.touches[0].clientY;
+},{passive:false});
+canvas.addEventListener('touchend', e=>{e.preventDefault();tVX=0;tVY=0;},{passive:false});
+canvas.addEventListener('click', handleClick);
+
+function screenToGame(e) {
+  const r=canvas.getBoundingClientRect(), sc=W/canvas.clientWidth;
+  return { mx:(e.clientX-r.left)*sc, my:(e.clientY-r.top)*sc };
+}
+
+function handleClick(e) {
+  const {mx,my} = screenToGame(e);
+  if(gs===GS.MENU){
+    [{id:'easy',x:W/2-175},{id:'medium',x:W/2},{id:'hard',x:W/2+175}].forEach(d=>{
+      if(mx>d.x-65&&mx<d.x+65&&my>300&&my<375) diff=d.id;
+    });
+    if(mx>W/2-115&&mx<W/2+115&&my>392&&my<448) initGame();
+  } else if(gs===GS.PAUSE){
+    if(mx>W/2-90&&mx<W/2+90&&my>295&&my<345) gs=GS.PLAY;
+    if(mx>W/2-90&&mx<W/2+90&&my>360&&my<410) gs=GS.MENU;
+  } else if(gs===GS.DEAD){
+    if(mx>W/2-90&&mx<W/2+90&&my>340&&my<392) initGame();
+    if(mx>W/2-90&&mx<W/2+90&&my>406&&my<456) gs=GS.MENU;
+  } else if(gs===GS.WIN){
+    if(mx>W/2-90&&mx<W/2+90&&my>405&&my<455) gs=GS.MENU;
+  }
+}
+
+function initGame(){
+  lives=5; score=0; dist=0; spawnT=0; frame=0; sMult=1;
+  invinc=false; invT=0; nLM=0;
+  obs=[]; parts=[]; notes=[];
+  PL.x=140; PL.y=RT+RH/2; PL.vx=0; PL.vy=0;
+  gs=GS.PLAY;
+}
+
+// ═══════════════════════════════════════════
+//  SPAWN
+// ═══════════════════════════════════════════
+function spawn(){
+  const d=DIFF[diff];
+  const type=d.types[Math.floor(Math.random()*d.types.length)];
+  const mg=52, y=RT+mg+Math.random()*(RH-mg*2);
+  if(type==='rock'){
+    const cl=Math.random()<0.28?2:1;
+    for(let c=0;c<cl;c++){
+      const cy=Math.max(RT+40,Math.min(RB-40,y+(c-cl/2)*42));
+      obs.push({type:'rock',x:W+55,y:cy,w:27+Math.random()*22,h:21+Math.random()*16,
+        spd:d.spd*sMult*(0.85+Math.random()*0.3),
+        rot:Math.random()*Math.PI*2,rsp:(Math.random()-0.5)*0.006,
+        mossy:Math.random()<0.4});
+    }
+  } else if(type==='ship'){
+    obs.push({type:'ship',x:W+115,y,w:84+Math.random()*26,h:28,
+      spd:d.spd*sMult*(0.75+Math.random()*0.45),
+      t:0,amp:0.3+Math.random()*0.5,freq:0.013+Math.random()*0.015,
+      hue:190+Math.random()*50});
+  } else {
+    obs.push({type:'big',x:W+160,y:RT+RH/2+(Math.random()-0.5)*RH*0.28,
+      w:140,h:40,spd:d.spd*sMult*0.58,t:0,freq:0.009});
+  }
+}
+
+function explode(x,y){
+  for(let i=0;i<28;i++){
+    const a=Math.random()*Math.PI*2,s=1.5+Math.random()*4.5;
+    parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,
+      dec:0.02+Math.random()*0.025,r:3+Math.random()*5,
+      col:['#ff6b35','#ffa500','#ff4444','#ffdd44'][Math.floor(Math.random()*4)]});
+  }
+  for(let i=0;i<14;i++){
+    const a=-Math.PI/2+(Math.random()-0.5)*Math.PI,s=1+Math.random()*3.5;
+    parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,
+      dec:0.03+Math.random()*0.03,r:2+Math.random()*3,col:'#b0eaff'});
+  }
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: PHOTO BACKGROUND HELPERS
+// ═══════════════════════════════════════════
+
+// Tile a photo horizontally across a rect
+function drawTiledPhoto(img, destX, destY, destW, destH, scrollFactor) {
+  if (!img) return false;
+  const srcW = img.naturalWidth, srcH = img.naturalHeight;
+  const scale = destH / srcH;
+  const tileW = srcW * scale;
+  const offset = (bgX * scrollFactor) % tileW;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(destX, destY, destW, destH); ctx.clip();
+  for (let x = destX - offset; x < destX + destW; x += tileW) {
+    ctx.drawImage(img, x, destY, tileW, destH);
+  }
+  ctx.restore();
+  return true;
+}
+
+// Draw photo fitted to height, centered, with parallax
+function drawFittedPhoto(img, destX, destY, destW, destH, scrollFactor, alpha) {
+  if (!img) return false;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.beginPath(); ctx.rect(destX, destY, destW, destH); ctx.clip();
+  const srcW=img.naturalWidth, srcH=img.naturalHeight;
+  const scale=destH/srcH, tileW=srcW*scale;
+  const off=(bgX*scrollFactor)%tileW;
+  for(let x=destX-off; x<destX+destW; x+=tileW)
+    ctx.drawImage(img, x, destY, tileW, destH);
+  ctx.restore();
+  return true;
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: SKY
+// ═══════════════════════════════════════════
+function dSky(){
+  // Sky gradient base
+  const g=ctx.createLinearGradient(0,HUD_H,0,RT);
+  g.addColorStop(0,'#4da6d8'); g.addColorStop(0.55,'#7ec4e8'); g.addColorStop(1,'#b2d8ea');
+  ctx.fillStyle=g; ctx.fillRect(0,HUD_H,W,SKY_H);
+
+  // Sun glow
+  const sg=ctx.createRadialGradient(700,HUD_H+14,0,700,HUD_H+14,48);
+  sg.addColorStop(0,'rgba(255,240,160,0.92)');
+  sg.addColorStop(0.4,'rgba(255,210,80,0.38)');
+  sg.addColorStop(1,'rgba(255,190,40,0)');
+  ctx.fillStyle=sg; ctx.fillRect(652,HUD_H,96,SKY_H);
+
+  dClouds();
+}
+
+function dCloud(x,y,sc,al){
+  ctx.save(); ctx.globalAlpha=al; ctx.fillStyle='#eef7ff';
+  ctx.beginPath();
+  [[0,0,22],[22,-12,17],[46,-8,20],[66,0,16],[25,6,14]].forEach(([cx,cy,r])=>
+    ctx.arc(x+cx*sc,y+cy*sc,r*sc,0,Math.PI*2));
+  ctx.fill(); ctx.restore();
+}
+function dClouds(){
+  [{bx:75,y:HUD_H+14,sc:1.1,al:0.78,r:0.055},
+   {bx:290,y:HUD_H+7,sc:0.82,al:0.68,r:0.038},
+   {bx:530,y:HUD_H+18,sc:1.25,al:0.74,r:0.048},
+   {bx:780,y:HUD_H+11,sc:0.92,al:0.65,r:0.065}]
+  .forEach(c=>dCloud(((c.bx-bgX*c.r)%(W+160)+W+160)%(W+160)-80, c.y, c.sc, c.al));
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: SKYLINE (photo + canvas fallback)
+// ═══════════════════════════════════════════
+function dSkyline(){
+  // Real photo of Yeouido skyline
+  const drawn = drawFittedPhoto(IMGS.skyline, 0, HUD_H, W, SKY_H, 0.08, 0.78);
+  if(!drawn) dCanvasSkyline();
+}
+
+function dCanvasSkyline(){
+  const bldgs=[
+    {x:30,w:16,h:34,c:'#6a7a8a'},{x:55,w:12,h:26,c:'#7a8a9a'},{x:76,w:20,h:44,c:'#5a6a7a'},
+    {x:106,w:14,h:30,c:'#7a8896'},{x:200,w:18,h:37,c:'#7a8aaa'},{x:228,w:24,h:50,c:'#6a7a9a'},
+    {x:262,w:16,h:34,c:'#6a7a8a'},{x:290,w:30,h:56,c:'#7a8a98'},{x:332,w:18,h:38,c:'#8090a0'},
+    {x:362,w:22,h:46,c:'#6a7a88'},{x:410,w:20,h:70,c:'#5a8aa0'},{x:438,w:20,h:65,c:'#4a7a90'},
+    {x:466,w:20,h:75,c:'#3a6a80'},{x:510,w:18,h:40,c:'#7a8a98'},{x:538,w:24,h:48,c:'#6a7a88'},
+    {x:575,w:16,h:34,c:'#8a9aaa'},{x:605,w:22,h:46,c:'#7a8898'},{x:642,w:18,h:36,c:'#6a7a86'},
+    {x:672,w:30,h:52,c:'#8a9aa8'},{x:715,w:16,h:30,c:'#7a8898'},{x:746,w:22,h:44,c:'#6a7888'},
+    {x:782,w:20,h:38,c:'#7e90a0'},{x:818,w:26,h:50,c:'#7a8896'},{x:858,w:18,h:34,c:'#6a7a88'}
+  ];
+  ctx.save();
+  bldgs.forEach(b=>{
+    const bx=((b.x-bgX*0.1)%(W+60)+W+60)%(W+60)-30;
+    ctx.globalAlpha=0.62; ctx.fillStyle=b.c; ctx.fillRect(bx,RT-b.h,b.w,b.h);
+    ctx.globalAlpha=0.14; ctx.fillStyle='#ffffcc';
+    for(let wy=RT-b.h+5;wy<RT-3;wy+=9)
+      for(let wx=bx+3;wx<bx+b.w-3;wx+=6) ctx.fillRect(wx,wy,3,5);
+  });
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: RIVER (real photo + wave overlay)
+// ═══════════════════════════════════════════
+function dRiver(){
+  // 1. Real Han River photo as base (tiled scroll)
+  const photoDrawn = drawTiledPhoto(IMGS.river, 0, RT, W, RH, 0.5);
+
+  if (!photoDrawn) {
+    // Canvas fallback
+    const g=ctx.createLinearGradient(0,RT,0,RB);
+    g.addColorStop(0,'#0d3a5c'); g.addColorStop(0.3,'#1f5e8c');
+    g.addColorStop(0.5,'#2270a8'); g.addColorStop(0.7,'#1f5e8c'); g.addColorStop(1,'#0d3a5c');
+    ctx.fillStyle=g; ctx.fillRect(0,RT,W,RH);
+  } else {
+    // Darken photo slightly for better contrast
+    ctx.fillStyle='rgba(0,20,50,0.32)'; ctx.fillRect(0,RT,W,RH);
+  }
+
+  // 2. Wave overlay (always rendered on top of photo)
+  dWaveOverlay();
+
+  // 3. Sparkles (sun glinting on water)
+  dSparkles();
+
+  // 4. River borders
+  ctx.strokeStyle='#0a2e4a'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(0,RT); ctx.lineTo(W,RT); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,RB); ctx.lineTo(W,RB); ctx.stroke();
+}
+
+function dWaveOverlay(){
+  const t=wT;
+  // Medium ripple lines
+  ctx.save(); ctx.lineWidth=1.2;
+  for(let i=0;i<16;i++){
+    const by=RT+14+i*(RH-28)/15;
+    ctx.globalAlpha=0.055+(i>2&&i<13?0.04:0); ctx.strokeStyle='#b0d8f0';
+    ctx.beginPath();
+    for(let x=0;x<=W;x+=3){
+      const y=by+Math.sin(x*0.022+t*1.1+i*1.3)*2.5
+               +Math.sin(x*0.038+t*0.7+i*0.8)*1.5
+               +Math.sin(x*0.055+t*1.5+i*0.4)*0.8;
+      x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+  // Bank foam
+  ctx.save(); ctx.lineWidth=1;
+  for(let i=0;i<4;i++){
+    ctx.globalAlpha=0.1-i*0.018; ctx.strokeStyle='#d0ecf8';
+    for(const yBase of [RT+4+i*6, RB-4-i*6]){
+      ctx.beginPath();
+      for(let x=0;x<=W;x+=4)
+        ctx.lineTo(x, yBase+Math.sin(x*0.06+t*2.4+i*3)*2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function dSparkles(){
+  ctx.save();
+  SPARKS.forEach(s=>{
+    s.ph+=s.sp;
+    const b=(Math.sin(s.ph)+1)/2;
+    if(b>0.55){
+      const a=(b-0.55)/0.45;
+      ctx.globalAlpha=a*0.65; ctx.fillStyle='#ffffff';
+      ctx.beginPath(); ctx.arc(s.x,s.y,s.sz*b,0,Math.PI*2); ctx.fill();
+      if(a>0.72){
+        ctx.globalAlpha=a*0.3; ctx.strokeStyle='#ffffff'; ctx.lineWidth=0.5;
+        ctx.beginPath();
+        ctx.moveTo(s.x-s.sz*2,s.y); ctx.lineTo(s.x+s.sz*2,s.y);
+        ctx.moveTo(s.x,s.y-s.sz*2); ctx.lineTo(s.x,s.y+s.sz*2);
+        ctx.stroke();
+      }
+    }
+  });
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: BANKS (real photos + canvas overlay)
+// ═══════════════════════════════════════════
+function dBanks(){
+  // Top narrow strip (path + mini trees)
+  const tg=ctx.createLinearGradient(0,RT-14,0,RT);
+  tg.addColorStop(0,'#448a46'); tg.addColorStop(1,'#2c6030');
+  ctx.fillStyle=tg; ctx.fillRect(0,RT-14,W,14);
+  ctx.fillStyle='#e5d3b0'; ctx.fillRect(0,RT-22,W,8);
+
+  // Bottom bank — real Hangang Park photo
+  const parkDrawn = drawFittedPhoto(IMGS.park, 0, RB, W, BANK_B, 0.28, 1.0);
+  if(!parkDrawn){
+    const bg=ctx.createLinearGradient(0,RB,0,H);
+    bg.addColorStop(0,'#3c8a3e'); bg.addColorStop(0.3,'#4a9a4c'); bg.addColorStop(1,'#285a2a');
+    ctx.fillStyle=bg; ctx.fillRect(0,RB,W,BANK_B);
+  }
+  // Always add path strip
+  ctx.fillStyle='rgba(229,211,176,0.75)'; ctx.fillRect(0,RB+2,W,9);
+  // Overlay tint if photo drawn
+  if(parkDrawn){
+    ctx.fillStyle='rgba(20,60,20,0.22)'; ctx.fillRect(0,RB,W,BANK_B);
+  }
+
+  // Grass tufts
+  ctx.fillStyle='#5aaa5c';
+  for(let i=0;i<W;i+=15){
+    const gx=((i-bgX*0.3)%(W+15)+W+15)%(W+15)-8;
+    ctx.beginPath(); ctx.moveTo(gx,RB+14); ctx.lineTo(gx-2,RB+2); ctx.lineTo(gx+1,RB+14); ctx.fill();
+  }
+  // Trees
+  [50,145,240,338,435,530,625,720,815].forEach(tp=>{
+    const tx=((tp-bgX*0.3)%(W+120)+W+120)%(W+120)-55;
+    ctx.fillStyle='#1c6a1e'; ctx.beginPath(); ctx.arc(tx,RB+40,18,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#2a8a2c'; ctx.beginPath(); ctx.arc(tx-6,RB+33,13,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#3caa3e'; ctx.beginPath(); ctx.arc(tx+4,RB+31,10,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#6b4422'; ctx.fillRect(tx-3,RB+20,6,14);
+    ctx.fillStyle='#2a7a2c'; ctx.beginPath(); ctx.arc(tx+11,RT-28,11,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#3c9c3e'; ctx.beginPath(); ctx.arc(tx+5,RT-33,8,0,Math.PI*2); ctx.fill();
+  });
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: BRIDGE
+// ═══════════════════════════════════════════
+function dBridge(){
+  const bx=W-(bgX*1.2%(W+550));
+  if(bx<-90||bx>W+90) return;
+  ctx.save(); ctx.globalAlpha=0.80;
+  ctx.fillStyle='#8899aa'; ctx.fillRect(bx-18,RT-14,36,9); ctx.fillRect(bx-18,RB+4,36,9);
+  ctx.fillStyle='#9aabbc'; ctx.fillRect(bx-6,RT-14,12,RH+18);
+  ctx.fillStyle='#bbccdd'; ctx.fillRect(bx-7,RT-32,14,20); ctx.fillRect(bx-4,RT-40,8,10);
+  ctx.strokeStyle='#a0b4c8'; ctx.lineWidth=1.5;
+  for(let i=0;i<7;i++){
+    ctx.globalAlpha=0.45;
+    ctx.beginPath(); ctx.moveTo(bx,RT-32); ctx.lineTo(bx-28-i*18,RT-6+i*18); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx,RT-32); ctx.lineTo(bx+28+i*18,RT-6+i*18); ctx.stroke();
+  }
+  ctx.globalAlpha=0.55; ctx.strokeStyle='#8898a8'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(bx-100,RT-10); ctx.lineTo(bx+100,RT-10); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(bx-100,RB+8); ctx.lineTo(bx+100,RB+8); ctx.stroke();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: PLAYER SHIP (이랜드크루즈) — real photo as texture
+// ═══════════════════════════════════════════
+function dPlayer(){
+  const {x,y,w,h}=PL;
+  ctx.save();
+  if(invinc&&Math.floor(invT/5)%2===1) ctx.globalAlpha=0.22;
+
+  // Wake
+  ctx.globalAlpha*=0.46; ctx.fillStyle='#b8ecff';
+  ctx.beginPath(); ctx.moveTo(x-w/2,y); ctx.lineTo(x-w/2-58,y-18);
+  ctx.lineTo(x-w/2-68,y); ctx.lineTo(x-w/2-58,y+18); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='#90d8f0'; ctx.lineWidth=1;
+  for(let i=1;i<=4;i++){
+    ctx.globalAlpha=0.24/i;
+    ctx.beginPath(); ctx.moveTo(x-w/2-i*8,y-i*5); ctx.lineTo(x-w/2-i*8-22,y);
+    ctx.lineTo(x-w/2-i*8,y+i*5); ctx.stroke();
+  }
+  ctx.globalAlpha=invinc&&Math.floor(invT/5)%2===1?0.22:1;
+
+  // ── Real photo boat texture inside hull shape ──
+  if(IMGS.boat1){
+    ctx.save();
+    // Hull clip path
+    ctx.beginPath();
+    ctx.moveTo(x-w/2,y-h/2+7);
+    ctx.lineTo(x+w/2-13,y-h/2+7);
+    ctx.bezierCurveTo(x+w/2+4,y-h/2+7,x+w/2+12,y-3,x+w/2+10,y+3);
+    ctx.lineTo(x+w/2+4,y+h/2-7); ctx.lineTo(x-w/2,y+h/2-7); ctx.closePath();
+    ctx.clip();
+    // Fill with real boat photo
+    const img=IMGS.boat1;
+    const tW=w*1.4, tH=tW*img.naturalHeight/img.naturalWidth;
+    ctx.drawImage(img, x-w/2-8, y-tH/2, tW, tH);
+    ctx.restore();
+
+    // Upper deck overlay (canvas drawn on top)
+    ctx.fillStyle='rgba(255,255,255,0.55)';
+    ctx.fillRect(x-w/2+12,y-h/2-10,w*0.60,17);
+    ctx.fillStyle='rgba(170,221,255,0.65)';
+    for(let i=0;i<5;i++) ctx.fillRect(x-w/2+18+i*11,y-h/2-7,7,5);
+
+  } else {
+    // Canvas fallback hull
+    ctx.fillStyle='#f6f8ff';
+    ctx.beginPath();
+    ctx.moveTo(x-w/2,y-h/2+7); ctx.lineTo(x+w/2-13,y-h/2+7);
+    ctx.bezierCurveTo(x+w/2+4,y-h/2+7,x+w/2+12,y-3,x+w/2+10,y+3);
+    ctx.lineTo(x+w/2+4,y+h/2-7); ctx.lineTo(x-w/2,y+h/2-7); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#1a2e5c';
+    ctx.beginPath();
+    ctx.moveTo(x-w/2,y+3); ctx.lineTo(x+w/2-13,y+3);
+    ctx.bezierCurveTo(x+w/2+4,y+3,x+w/2+12,y+1,x+w/2+10,y+3);
+    ctx.lineTo(x+w/2+4,y+h/2-7); ctx.lineTo(x-w/2,y+h/2-7); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#edf2f8'; ctx.fillRect(x-w/2+5,y-h/2+7,w*0.74,h/2-5);
+    ctx.fillStyle='#ffffff'; ctx.fillRect(x-w/2+12,y-h/2-10,w*0.60,17);
+    ctx.fillStyle='#bbddf8';
+    for(let i=0;i<5;i++) ctx.fillRect(x-w/2+18+i*11,y-h/2-7,7,5);
+  }
+
+  // Funnel (always canvas)
+  ctx.fillStyle='#cc1a1a';
+  ctx.beginPath(); ctx.moveTo(x-w/2+28,y-h/2-10); ctx.lineTo(x-w/2+24,y-h/2-30);
+  ctx.lineTo(x-w/2+40,y-h/2-30); ctx.lineTo(x-w/2+36,y-h/2-10); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#ee2222'; ctx.fillRect(x-w/2+22,y-h/2-35,20,6);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(x-w/2+24,y-h/2-20,16,3);
+
+  // Name label
+  ctx.font='bold 6.5px sans-serif'; ctx.fillStyle='#003399'; ctx.textAlign='center';
+  ctx.fillText('이랜드크루즈',x+4,y+2); ctx.textAlign='left';
+
+  // Flag
+  ctx.fillStyle='#333'; ctx.fillRect(x+w/2-17,y-h/2-24,1.5,18);
+  ctx.fillStyle='#cc0000'; ctx.fillRect(x+w/2-16,y-h/2-24,12,7);
+  ctx.fillStyle='#0000cc'; ctx.fillRect(x+w/2-16,y-h/2-16,12,4);
+  ctx.fillStyle='#cc0000'; ctx.beginPath(); ctx.arc(x+w/2-10,y-h/2-20,2,0,Math.PI*2); ctx.fill();
+
+  // Smoke
+  ctx.globalAlpha*=0.36; ctx.fillStyle='#cccccc';
+  for(let i=0;i<4;i++){
+    const t2=((frame*0.032+i/4)%1);
+    ctx.beginPath(); ctx.arc(x-w/2+32-t2*22,y-h/2-36-t2*20,3+t2*4,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: ENEMY SHIPS (real photo as hull texture)
+// ═══════════════════════════════════════════
+function dShip(o){
+  ctx.save(); ctx.translate(o.x,o.y);
+  const ow=o.w, oh=o.h;
+  // Wake
+  ctx.globalAlpha=0.36; ctx.fillStyle='#aae8ff';
+  ctx.beginPath(); ctx.moveTo(ow/2,0); ctx.lineTo(ow/2+48,-14); ctx.lineTo(ow/2+58,0);
+  ctx.lineTo(ow/2+48,14); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=1;
+
+  // Hull shape — real boat photo texture
+  if(IMGS.boat2){
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(-ow/2,-oh/2+5); ctx.lineTo(ow/2-11,-oh/2+5);
+    ctx.bezierCurveTo(ow/2+4,-oh/2+5,ow/2+10,-2,ow/2+8,2);
+    ctx.lineTo(ow/2+4,oh/2-5); ctx.lineTo(-ow/2,oh/2-5); ctx.closePath();
+    ctx.clip();
+    const img=IMGS.boat2;
+    const tW=ow*1.3, tH=tW*img.naturalHeight/img.naturalWidth;
+    ctx.drawImage(img, -ow/2-4, -tH/2, tW, tH);
+    ctx.restore();
+    ctx.fillStyle='rgba(0,30,80,0.3)';
+    ctx.beginPath();
+    ctx.moveTo(-ow/2,2); ctx.lineTo(ow/2-11,2); ctx.lineTo(ow/2+8,2);
+    ctx.lineTo(ow/2+4,oh/2-5); ctx.lineTo(-ow/2,oh/2-5); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle='#bb3300';
+    ctx.beginPath();
+    ctx.moveTo(-ow/2,-oh/2+5); ctx.lineTo(ow/2-11,-oh/2+5);
+    ctx.bezierCurveTo(ow/2+4,-oh/2+5,ow/2+10,-2,ow/2+8,2);
+    ctx.lineTo(ow/2+4,oh/2-5); ctx.lineTo(-ow/2,oh/2-5); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#991e00';
+    ctx.beginPath();
+    ctx.moveTo(-ow/2,2); ctx.lineTo(ow/2-11,2); ctx.lineTo(ow/2+8,2);
+    ctx.lineTo(ow/2+4,oh/2-5); ctx.lineTo(-ow/2,oh/2-5); ctx.closePath(); ctx.fill();
+  }
+
+  ctx.fillStyle='rgba(238,243,248,0.65)'; ctx.fillRect(-ow/2+5,-oh/2-13,ow*0.62,oh/2+9);
+  ctx.fillStyle='rgba(238,243,248,0.9)'; ctx.fillRect(-ow/2+14,-oh/2-23,ow*0.48,14);
+  ctx.fillStyle='rgba(0,68,170,0.7)'; ctx.fillRect(-ow/2+5,-oh/2-1,ow*0.62,3);
+  ctx.fillStyle=`hsla(${o.hue||200},55%,68%,0.75)`;
+  for(let i=0;i<5;i++) ctx.fillRect(-ow/2+10+i*11,-oh/2-8,7,6);
+  ctx.fillStyle='rgba(170,221,255,0.8)';
+  for(let i=0;i<4;i++) ctx.fillRect(-ow/2+18+i*10,-oh/2-20,6,5);
+  ctx.fillStyle='#cc3e00';
+  ctx.beginPath(); ctx.moveTo(-ow/2+18,-oh/2-13); ctx.lineTo(-ow/2+15,-oh/2-30);
+  ctx.lineTo(-ow/2+29,-oh/2-30); ctx.lineTo(-ow/2+26,-oh/2-13); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#ee5500'; ctx.fillRect(-ow/2+13,-oh/2-34,18,5);
+  ctx.restore();
+}
+
+function dBigShip(o){
+  ctx.save(); ctx.translate(o.x,o.y);
+  const ow=o.w, oh=o.h;
+  ctx.globalAlpha=0.3; ctx.fillStyle='#c0eaff';
+  ctx.beginPath(); ctx.moveTo(ow/2,0); ctx.lineTo(ow/2+70,-22); ctx.lineTo(ow/2+82,0);
+  ctx.lineTo(ow/2+70,22); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=1;
+
+  // Hull with boat photo texture
+  if(IMGS.boat2){
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(-ow/2,-oh/2+7); ctx.lineTo(ow/2-15,-oh/2+7);
+    ctx.bezierCurveTo(ow/2+8,-oh/2+7,ow/2+14,-2,ow/2+12,3);
+    ctx.lineTo(ow/2+6,oh/2-7); ctx.lineTo(-ow/2,oh/2-7); ctx.closePath();
+    ctx.clip();
+    const img=IMGS.boat2;
+    const tW=ow*1.4, tH=tW*img.naturalHeight/img.naturalWidth;
+    ctx.drawImage(img, -ow/2-5, -tH/2, tW, tH);
+    ctx.restore();
+    ctx.fillStyle='rgba(0,20,60,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(-ow/2,3); ctx.lineTo(ow/2-15,3); ctx.lineTo(ow/2+12,3);
+    ctx.lineTo(ow/2+6,oh/2-7); ctx.lineTo(-ow/2,oh/2-7); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle='#7a4200';
+    ctx.beginPath();
+    ctx.moveTo(-ow/2,-oh/2+7); ctx.lineTo(ow/2-15,-oh/2+7);
+    ctx.bezierCurveTo(ow/2+8,-oh/2+7,ow/2+14,-2,ow/2+12,3);
+    ctx.lineTo(ow/2+6,oh/2-7); ctx.lineTo(-ow/2,oh/2-7); ctx.closePath(); ctx.fill();
+  }
+
+  ctx.fillStyle='rgba(238,238,238,0.82)'; ctx.fillRect(-ow/2+7,-oh/2-19,ow*0.70,oh/2+13);
+  ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fillRect(-ow/2+17,-oh/2-33,ow*0.55,18);
+  ctx.fillStyle='rgba(248,248,248,0.88)'; ctx.fillRect(-ow/2+28,-oh/2-46,ow*0.38,16);
+  [
+    {sx:-ow/2+13,cnt:7,sp:11,y:-oh/2-11,col:'#88bbdd'},
+    {sx:-ow/2+21,cnt:5,sp:11,y:-oh/2-28,col:'#99ccee'},
+    {sx:-ow/2+31,cnt:3,sp:11,y:-oh/2-42,col:'#aaddff'}
+  ].forEach(row=>{
+    ctx.fillStyle=row.col;
+    for(let i=0;i<row.cnt;i++) ctx.fillRect(row.sx+i*row.sp,row.y,7,5);
+  });
+  for(let fi=0;fi<2;fi++){
+    const fx=-ow/2+28+fi*40;
+    ctx.fillStyle='#880000';
+    ctx.beginPath(); ctx.moveTo(fx,-oh/2-19); ctx.lineTo(fx-5,-oh/2-38);
+    ctx.lineTo(fx+12,-oh/2-38); ctx.lineTo(fx+7,-oh/2-19); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#aa0000'; ctx.fillRect(fx-7,-oh/2-42,21,6);
+    ctx.fillStyle='#ffcc00'; ctx.fillRect(fx-3,-oh/2-28,13,3);
+  }
+  ctx.font='bold 8px sans-serif'; ctx.fillStyle='#004488'; ctx.textAlign='center';
+  ctx.fillText('한강유람선',0,oh/2-10); ctx.textAlign='left';
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: ROCK (realistic canvas with photo texture option)
+// ═══════════════════════════════════════════
+function dRock(o){
+  ctx.save(); ctx.translate(o.x,o.y); ctx.rotate(o.rot);
+  const rw=o.w, rh=o.h;
+  // Water rings
+  for(let i=1;i<=2;i++){
+    ctx.globalAlpha=0.18/i; ctx.strokeStyle='#4a9ac8'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.ellipse(0,rh*0.32+i*5,rw*0.5+i*7,rh*0.18+i*3,0,0,Math.PI*2); ctx.stroke();
+  }
+  // Shadow
+  ctx.globalAlpha=0.30; ctx.fillStyle='#050f18';
+  ctx.beginPath(); ctx.ellipse(3,rh*0.3,rw*0.52,rh*0.26,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+
+  // Rock shape (clipping path)
+  ctx.beginPath();
+  ctx.moveTo(-rw*0.42,rh*0.1);
+  ctx.bezierCurveTo(-rw*0.48,-rh*0.35,-rw*0.24,-rh*0.52,0,-rh*0.48);
+  ctx.bezierCurveTo(rw*0.27,-rh*0.52,rw*0.5,-rh*0.28,rw*0.45,rh*0.05);
+  ctx.bezierCurveTo(rw*0.52,rh*0.3,rw*0.32,rh*0.48,0,rh*0.42);
+  ctx.bezierCurveTo(-rw*0.3,rh*0.48,-rw*0.5,rh*0.3,-rw*0.42,rh*0.1);
+  ctx.closePath();
+
+  // Fill with dark rock gradient
+  const rg=ctx.createRadialGradient(0,rh*0.08,1,0,0,rw*0.62);
+  rg.addColorStop(0,'#8a7a68'); rg.addColorStop(0.45,'#6a5a48');
+  rg.addColorStop(0.75,'#4a3a2a'); rg.addColorStop(1,'#281c10');
+  ctx.fillStyle=rg; ctx.fill();
+
+  // Mid layer
+  ctx.beginPath();
+  ctx.moveTo(-rw*0.3,-rh*0.06);
+  ctx.bezierCurveTo(-rw*0.35,-rh*0.32,-rw*0.17,-rh*0.44,0,-rh*0.38);
+  ctx.bezierCurveTo(rw*0.2,-rh*0.44,rw*0.34,-rh*0.22,rw*0.32,-rh*0.02);
+  ctx.bezierCurveTo(rw*0.36,rh*0.18,rw*0.22,rh*0.3,0,rh*0.26);
+  ctx.bezierCurveTo(-rw*0.22,rh*0.3,-rw*0.34,rh*0.18,-rw*0.3,-rh*0.06);
+  ctx.closePath(); ctx.fillStyle='#78685a'; ctx.fill();
+
+  // Cracks
+  ctx.strokeStyle='#2a1a0a'; ctx.lineWidth=0.8; ctx.globalAlpha=0.45;
+  ctx.beginPath(); ctx.moveTo(-rw*0.14,-rh*0.3); ctx.lineTo(rw*0.04,rh*0.08); ctx.lineTo(rw*0.18,rh*0.24); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rw*0.16,-rh*0.24); ctx.lineTo(rw*0.04,-rh*0.02); ctx.stroke();
+  ctx.globalAlpha=1;
+
+  // Moss
+  if(o.mossy){
+    ctx.globalAlpha=0.46; ctx.fillStyle='#4a7a38';
+    ctx.beginPath(); ctx.ellipse(-rw*0.12,rh*0.08,rw*0.22,rh*0.13,0.3,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=0.36; ctx.fillStyle='#5a9a48';
+    ctx.beginPath(); ctx.ellipse(-rw*0.08,rh*0.05,rw*0.14,rh*0.08,0.3,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+
+  // Wet highlight
+  const hl=ctx.createRadialGradient(-rw*0.22,-rh*0.3,0,-rw*0.2,-rh*0.28,rw*0.3);
+  hl.addColorStop(0,'rgba(255,255,255,0.52)'); hl.addColorStop(0.5,'rgba(255,255,255,0.14)'); hl.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=hl;
+  ctx.beginPath(); ctx.ellipse(-rw*0.2,-rh*0.28,rw*0.28,rh*0.2,-0.3,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
+//  DRAW: HUD
+// ═══════════════════════════════════════════
+function dHUD(){
+  const g=ctx.createLinearGradient(0,0,0,HUD_H);
+  g.addColorStop(0,'rgba(3,14,30,0.98)'); g.addColorStop(1,'rgba(6,24,46,0.94)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,HUD_H);
+  ctx.strokeStyle='#184a70'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(0,HUD_H); ctx.lineTo(W,HUD_H); ctx.stroke();
+
+  // Hearts
+  for(let i=0;i<5;i++){
+    const hx=20+i*32, hy=15, alive=i<lives;
+    ctx.save();
+    ctx.fillStyle=alive?'#ff2040':'#242e3a';
+    if(alive){ctx.shadowColor='#ff2040';ctx.shadowBlur=7;}
+    const s=alive?1:0.82;
+    ctx.beginPath();
+    ctx.arc(hx-5*s,hy,8*s,Math.PI,0); ctx.arc(hx+5*s,hy,8*s,Math.PI,0);
+    ctx.lineTo(hx+12*s,hy+9*s); ctx.lineTo(hx,hy+22*s); ctx.lineTo(hx-12*s,hy+9*s);
+    ctx.closePath(); ctx.fill(); ctx.restore();
+  }
+
+  ctx.textAlign='center';
+  ctx.font='bold 16px sans-serif'; ctx.fillStyle='#fff';
+  ctx.fillText(`점수  ${Math.floor(score)}`,W/2,22);
+  ctx.font='11px sans-serif'; ctx.fillStyle='#6a98b8';
+  ctx.fillText({easy:'⭐ 쉬움',medium:'⭐⭐ 중간',hard:'⭐⭐⭐ 어려움'}[diff],W/2,40);
+
+  const bx=W-238, by=13, bw=218, bh=15, pr=Math.min(dist/600,1);
+  ctx.fillStyle='rgba(0,0,0,0.6)';
+  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,7); ctx.fill();
+  if(pr>0){
+    const pg=ctx.createLinearGradient(bx,0,bx+bw,0);
+    pg.addColorStop(0,'#0096c7'); pg.addColorStop(0.5,'#00b4d8'); pg.addColorStop(1,'#48cae4');
+    ctx.fillStyle=pg; ctx.beginPath(); ctx.roundRect(bx,by,bw*pr,bh,7); ctx.fill();
+    if(pr<0.96){ctx.font='11px sans-serif';ctx.fillStyle='#fff';ctx.fillText('⛴',bx+bw*pr-6,by+bh);}
+  }
+  ctx.strokeStyle='#2080a0'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,7); ctx.stroke();
+  ctx.font='10px sans-serif'; ctx.textAlign='left'; ctx.fillStyle='#7a9cb8';
+  ctx.fillText('여의도 (이랜드크루즈)',bx,by+bh+13);
+  ctx.textAlign='right'; ctx.fillText('두물머리',bx+bw,by+bh+13);
+  ctx.textAlign='center'; ctx.fillStyle='#fff'; ctx.font='bold 10px sans-serif';
+  ctx.fillText(`${Math.floor(dist)} / 600 km`,bx+bw/2,by+bh+13);
+  ctx.textAlign='left';
+}
+
+function dParts(){
+  parts.forEach(p=>{
+    ctx.save(); ctx.globalAlpha=p.life; ctx.fillStyle=p.col;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); ctx.restore();
+  });
+}
+function dNotes(){
+  notes.forEach(n=>{
+    n.life-=0.015; n.y-=0.5; if(n.life<=0) return;
+    ctx.save(); ctx.globalAlpha=Math.min(1,n.life*3); ctx.textAlign='center';
+    ctx.font='bold 18px sans-serif'; ctx.fillStyle='#ffd700';
+    ctx.shadowColor='#ffaa00'; ctx.shadowBlur=10;
+    ctx.fillText(n.txt,W/2,n.y); ctx.restore();
+  });
+  for(let i=notes.length-1;i>=0;i--) if(notes[i].life<=0) notes.splice(i,1);
+}
+
+// ═══════════════════════════════════════════
+//  SCREENS
+// ═══════════════════════════════════════════
+function dLoading(){
+  ctx.fillStyle='#071520'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.font='52px sans-serif'; ctx.fillStyle='#fff'; ctx.fillText('⛴',W/2,H/2-60);
+  ctx.font='bold 22px sans-serif'; ctx.fillStyle='#00b4d8';
+  ctx.fillText('이랜드크루즈 한강 유람선',W/2,H/2-10);
+  ctx.font='15px sans-serif'; ctx.fillStyle='#558899';
+  ctx.fillText('실제 한강 사진 로딩 중...',W/2,H/2+30);
+  // Progress bar
+  const bw=300, bh=10, bx=(W-bw)/2, by=H/2+55;
+  ctx.fillStyle='rgba(255,255,255,0.1)';
+  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,5); ctx.fill();
+  const prog=loadedCount/totalPhotos;
+  if(prog>0){
+    const pg=ctx.createLinearGradient(bx,0,bx+bw,0);
+    pg.addColorStop(0,'#0096c7'); pg.addColorStop(1,'#48cae4');
+    ctx.fillStyle=pg; ctx.beginPath(); ctx.roundRect(bx,by,bw*prog,bh,5); ctx.fill();
+  }
+  ctx.strokeStyle='#2288aa'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,5); ctx.stroke();
+  ctx.font='12px sans-serif'; ctx.fillStyle='#446688';
+  ctx.fillText(`${loadedCount} / ${totalPhotos} 이미지`,W/2,by+bh+20);
+  ctx.textAlign='left';
+}
+
+function dMenu(){
+  wT+=0.02; bgX+=0.7;
+  dSky(); dSkyline(); dRiver(); dBanks();
+  ctx.fillStyle='rgba(2,10,24,0.82)'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.textAlign='center';
+  ctx.font='bold 12px sans-serif'; ctx.fillStyle='#0880dd';
+  ctx.fillText('E·LAND CRUISE  이랜드크루즈',W/2,74);
+  ctx.shadowColor='#00c8ff'; ctx.shadowBlur=18;
+  ctx.font='bold 46px sans-serif';
+  const tg=ctx.createLinearGradient(W/2-210,0,W/2+210,0);
+  tg.addColorStop(0,'#00b4d8'); tg.addColorStop(0.5,'#90e0ef'); tg.addColorStop(1,'#00b4d8');
+  ctx.fillStyle=tg; ctx.fillText('한강 유람선',W/2,124); ctx.shadowBlur=0;
+  ctx.font='17px sans-serif'; ctx.fillStyle='#9ac8dc';
+  ctx.fillText('여의도 이랜드크루즈 → 두물머리  600 km',W/2,156);
+  ctx.font='52px sans-serif'; ctx.fillText('⛴',W/2,220);
+  ctx.font='bold 14px sans-serif'; ctx.fillStyle='#cce5ff';
+  ctx.fillText('난이도 선택',W/2,274);
+  [{id:'easy',lbl:'쉬움',sub:'천천히 즐기기',x:W/2-175},
+   {id:'medium',lbl:'중간',sub:'표준 속도',x:W/2},
+   {id:'hard',lbl:'어려움',sub:'도전 모드',x:W/2+175}].forEach(d=>{
+    const sel=diff===d.id;
+    ctx.fillStyle=sel?'#0a5585':'rgba(255,255,255,0.05)';
+    ctx.beginPath(); ctx.roundRect(d.x-65,292,130,83,10); ctx.fill();
+    ctx.strokeStyle=sel?'#00c8ff':'#2a4460'; ctx.lineWidth=sel?2:1;
+    ctx.beginPath(); ctx.roundRect(d.x-65,292,130,83,10); ctx.stroke();
+    ctx.fillStyle=sel?'#fff':'#88aacc'; ctx.font=`bold ${sel?19:17}px sans-serif`;
+    ctx.fillText(d.lbl,d.x,326);
+    ctx.font='11px sans-serif'; ctx.fillStyle=sel?'#90e0ef':'#446688';
+    ctx.fillText(d.sub,d.x,346);
+    if(sel){ctx.fillStyle='#00c8ff';ctx.font='15px sans-serif';ctx.fillText('✓',d.x,366);}
+  });
+  ctx.fillStyle='#0a5888'; ctx.beginPath(); ctx.roundRect(W/2-118,392,236,56,14); ctx.fill();
+  ctx.strokeStyle='#00c8ff'; ctx.lineWidth=2; ctx.beginPath(); ctx.roundRect(W/2-118,392,236,56,14); ctx.stroke();
+  ctx.shadowColor='#00c8ff'; ctx.shadowBlur=10;
+  ctx.fillStyle='#fff'; ctx.font='bold 24px sans-serif'; ctx.fillText('출발하기  ⛵',W/2,426); ctx.shadowBlur=0;
+  ctx.font='12px sans-serif'; ctx.fillStyle='#4e6e88';
+  ctx.fillText('방향키 / WASD로 조종  |  ESC 일시정지  |  ❤ 목숨 5개',W/2,464);
+  ctx.restore(); ctx.textAlign='left';
+}
+
+function dPause(){
+  ctx.fillStyle='rgba(0,0,0,0.72)'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.textAlign='center';
+  ctx.font='bold 44px sans-serif'; ctx.fillStyle='#fff'; ctx.fillText('일시 정지',W/2,208);
+  ctx.font='14px sans-serif'; ctx.fillStyle='#5a7a99'; ctx.fillText('ESC 키로 재개',W/2,250);
+  ctx.fillStyle='#0a5888'; ctx.beginPath(); ctx.roundRect(W/2-90,295,180,50,10); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 19px sans-serif'; ctx.fillText('계속 하기',W/2,327);
+  ctx.fillStyle='rgba(255,255,255,0.07)'; ctx.beginPath(); ctx.roundRect(W/2-90,360,180,50,10); ctx.fill();
+  ctx.fillStyle='#8aaccc'; ctx.font='17px sans-serif'; ctx.fillText('메인 메뉴',W/2,391);
+  ctx.restore(); ctx.textAlign='left';
+}
+
+function dDead(){
+  ctx.fillStyle='rgba(0,0,0,0.80)'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.textAlign='center';
+  ctx.shadowColor='#ff0033'; ctx.shadowBlur=18;
+  ctx.font='bold 52px sans-serif'; ctx.fillStyle='#ff2244'; ctx.fillText('난파!',W/2,182); ctx.shadowBlur=0;
+  ctx.font='52px sans-serif'; ctx.fillText('😢',W/2,244);
+  ctx.font='20px sans-serif'; ctx.fillStyle='#cce5ff';
+  ctx.fillText(`항해 거리: ${Math.floor(dist)} km / 600 km`,W/2,300);
+  ctx.fillText(`최종 점수: ${Math.floor(score)}`,W/2,334);
+  ctx.fillStyle='#0a5888'; ctx.beginPath(); ctx.roundRect(W/2-90,355,180,50,12); ctx.fill();
+  ctx.strokeStyle='#00b4d8'; ctx.lineWidth=2; ctx.beginPath(); ctx.roundRect(W/2-90,355,180,50,12); ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.font='bold 21px sans-serif'; ctx.fillText('다시 출발!',W/2,387);
+  ctx.fillStyle='rgba(255,255,255,0.07)'; ctx.beginPath(); ctx.roundRect(W/2-90,418,180,50,12); ctx.fill();
+  ctx.fillStyle='#8aaccc'; ctx.font='17px sans-serif'; ctx.fillText('메인 메뉴',W/2,449);
+  ctx.restore(); ctx.textAlign='left';
+}
+
+function dWin(){
+  ctx.fillStyle='rgba(2,10,24,0.90)'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.textAlign='center';
+  const wg=ctx.createLinearGradient(W/2-170,0,W/2+170,0);
+  wg.addColorStop(0,'#ffd700'); wg.addColorStop(0.5,'#fff8dc'); wg.addColorStop(1,'#ffd700');
+  ctx.shadowColor='#ffaa00'; ctx.shadowBlur=16;
+  ctx.font='bold 48px sans-serif'; ctx.fillStyle=wg; ctx.fillText('두물머리 도착!',W/2,166); ctx.shadowBlur=0;
+  ctx.font='58px sans-serif'; ctx.fillText('🎉',W/2,244);
+  ctx.font='20px sans-serif'; ctx.fillStyle='#cce5ff';
+  ctx.fillText('여의도 이랜드크루즈 → 두물머리 완주!',W/2,292);
+  ctx.font='bold 24px sans-serif'; ctx.fillStyle='#ffd700';
+  ctx.fillText(`최종 점수: ${Math.floor(score)+lives*500}`,W/2,336);
+  ctx.font='14px sans-serif'; ctx.fillStyle='#88aacc';
+  ctx.fillText(`남은 목숨 보너스: +${lives*500}`,W/2,364);
+  ctx.fillStyle='#0a5888'; ctx.beginPath(); ctx.roundRect(W/2-90,402,180,52,12); ctx.fill();
+  ctx.strokeStyle='#ffd700'; ctx.lineWidth=2; ctx.beginPath(); ctx.roundRect(W/2-90,402,180,52,12); ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.font='bold 20px sans-serif'; ctx.fillText('처음으로',W/2,435);
+  ctx.restore(); ctx.textAlign='left';
+}
+
+// ═══════════════════════════════════════════
+//  LANDMARKS
+// ═══════════════════════════════════════════
+const LMS=[
+  {d:50,t:'⚓ 원효대교 통과!'},{d:120,t:'🌉 마포대교 통과!'},
+  {d:200,t:'🌊 한강 중간 지점!'},{d:310,t:'🏞 팔당대교 진입!'},
+  {d:430,t:'🌿 양수리 접근!'},{d:540,t:'💨 두물머리 근처!'},
+  {d:580,t:'💪 거의 다 왔다! 화이팅!'}
+];
+
+// ═══════════════════════════════════════════
+//  UPDATE
+// ═══════════════════════════════════════════
+function update(){
+  if(gs!==GS.PLAY) return;
+  frame++; wT+=0.022;
+  bgX+=DIFF[diff].spd*sMult*0.5;
+  sMult=1+dist/1600;
+  dist+=DIFF[diff].dpf*sMult;
+  score+=0.1*sMult;
+
+  if(nLM<LMS.length&&dist>=LMS[nLM].d){
+    notes.push({txt:LMS[nLM].t,y:RT+RH*0.22,life:1});
+    score+=50; nLM++;
+  }
+  if(dist>=600){score=Math.floor(score)+lives*500; gs=GS.WIN; return;}
+
+  let ax=0,ay=0;
+  if(K['ArrowLeft']||K['KeyA']) ax-=1;
+  if(K['ArrowRight']||K['KeyD']) ax+=1;
+  if(K['ArrowUp']||K['KeyW']) ay-=1;
+  if(K['ArrowDown']||K['KeyS']) ay+=1;
+  ax+=tVX*0.12; ay+=tVY*0.12;
+
+  PL.vx=(PL.vx+ax*0.55)*0.80; PL.vy=(PL.vy+ay*0.55)*0.80;
+  PL.vx=Math.max(-PL.spd,Math.min(PL.spd,PL.vx));
+  PL.vy=Math.max(-PL.spd,Math.min(PL.spd,PL.vy));
+  PL.x=Math.max(PL.w/2+5,Math.min(W*0.45,PL.x+PL.vx));
+  PL.y=Math.max(RT+PL.h/2+8,Math.min(RB-PL.h/2-8,PL.y+PL.vy));
+
+  if(invinc){invT++;if(invT>=180){invinc=false;invT=0;}}
+
+  spawnT++;
+  const si=Math.max(28,DIFF[diff].si/sMult);
+  if(spawnT>=si&&obs.length<DIFF[diff].mo){spawn();spawnT=0;}
+
+  for(let i=obs.length-1;i>=0;i--){
+    const o=obs[i];
+    o.x-=o.spd;
+    if(o.type==='ship'||o.type==='big'){
+      o.t+=o.freq; o.y+=Math.sin(o.t)*(o.amp||0.4);
+      o.y=Math.max(RT+o.h/2+10,Math.min(RB-o.h/2-10,o.y));
+    }
+    if(o.type==='rock') o.rot+=o.rsp;
+    if(o.x<-(o.w+80)){obs.splice(i,1);score+=o.type==='big'?30:12;continue;}
+    if(!invinc){
+      const dx=Math.abs(PL.x-o.x),dy=Math.abs(PL.y-o.y);
+      const hw=(PL.w/2+o.w/2)*DIFF[diff].hm, hh=(PL.h/2+o.h/2)*DIFF[diff].hm;
+      if(dx<hw&&dy<hh){
+        lives--; invinc=true; invT=0;
+        explode(PL.x,PL.y); obs.splice(i,1);
+        if(lives<=0){gs=GS.DEAD;return;}
+      }
+    }
+  }
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=0.07; p.life-=p.dec;
+    if(p.life<=0) parts.splice(i,1);
+  }
+}
+
+// ═══════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════
+function loop(){
+  ctx.clearRect(0,0,W,H);
+  if(gs===GS.LOADING){
+    dLoading();
+  } else if(gs===GS.MENU){
+    dMenu();
+  } else {
+    dSky();
+    dSkyline();
+    dRiver();
+    dBanks();
+    dBridge();
+    obs.forEach(o=>{
+      if(o.type==='rock') dRock(o);
+      else if(o.type==='ship') dShip(o);
+      else dBigShip(o);
+    });
+    dParts();
+    dPlayer();
+    dHUD();
+    dNotes();
+    if(gs===GS.PAUSE) dPause();
+    else if(gs===GS.DEAD)  dDead();
+    else if(gs===GS.WIN)   dWin();
+  }
+  update();
+  requestAnimationFrame(loop);
+}
+
+// ═══════════════════════════════════════════
+//  START — load images, then launch
+// ═══════════════════════════════════════════
+gs = GS.LOADING;
+loop(); // Start rendering loading screen immediately
+
+loadAllImages().then(() => {
+  gs = GS.MENU;
+});
+</script>
+</body>
+</html>
