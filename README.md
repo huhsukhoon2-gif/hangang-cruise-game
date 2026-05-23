@@ -3,7 +3,7 @@
 여의도 **이랜드크루즈** 터미널을 출발해 **두물머리**까지 600 km를 항해하는 캐주얼 웹 게임입니다.  
 실제 한강 사진을 배경으로, 바위와 유람선을 피하며 목적지를 향해 달리세요!
 
-🎮 **[지금 바로 플레이하기](https://huhsukhoon2-gif.github.io/hangang-cruise-game/)**
+🎮 **[지금 바로 플레이하기 →](https://huhsukhoon2-gif.github.io/hangang-cruise-game/)**
 
 ---
 
