@@ -458,164 +458,160 @@ function dBridge(){
   ctx.restore();
 }
 
-// ── 공통: 실사 선박 사진을 사이드뷰 스프라이트로 렌더링 ──
-// img: Image 객체, cx/cy: 중심 좌표, dispW: 표시 너비, flipH: 좌우 반전
-function drawShipPhoto(img, cx, cy, dispW, flipH, label, showSmoke){
-  if(!img) return false;
-  const iw=img.naturalWidth, ih=img.naturalHeight;
-  // 사진에서 선박 본체 크롭 (상단 하늘 15%, 하단 수면 12% 제외)
-  const sy=ih*0.15, sh=ih*0.73, sw=iw;
-  const aspect=sw/sh;
-  const dispH=dispW/aspect;
-  const dx=cx-dispW*0.5, dy=cy-dispH*0.48;
-
-  ctx.save();
-  if(flipH){ ctx.translate(cx*2,0); ctx.scale(-1,1); }
-
-  // 그림자
-  ctx.save();
-  ctx.globalAlpha=0.18; ctx.fillStyle='#001428';
-  ctx.beginPath(); ctx.ellipse(cx+(flipH?-dispW*0.04:dispW*0.04),cy+dispH*0.42,dispW*0.44,dispH*0.07,0,0,Math.PI*2); ctx.fill();
-  ctx.restore();
-
-  // 실사 사진 그리기 (선박 크롭)
-  ctx.drawImage(img, 0, sy, sw, sh, dx, dy, dispW, dispH);
-
-  // 좌우 페이드 (자연스러운 블렌딩)
-  const fade=dispW*0.06;
-  const lgL=ctx.createLinearGradient(dx,0,dx+fade,0);
-  lgL.addColorStop(0,'rgba(20,90,150,0.85)'); lgL.addColorStop(1,'rgba(20,90,150,0)');
-  ctx.fillStyle=lgL; ctx.fillRect(dx,dy,fade,dispH);
-  const lgR=ctx.createLinearGradient(dx+dispW-fade,0,dx+dispW,0);
-  lgR.addColorStop(0,'rgba(20,90,150,0)'); lgR.addColorStop(1,'rgba(20,90,150,0.85)');
-  ctx.fillStyle=lgR; ctx.fillRect(dx+dispW-fade,dy,fade,dispH);
-
-  // 이름 라벨
-  if(label){
-    ctx.save();
-    if(flipH){ ctx.translate(cx*2,0); ctx.scale(-1,1); }
-    ctx.font='bold 8px sans-serif'; ctx.fillStyle='rgba(255,255,255,0.9)';
-    ctx.textAlign='center';
-    ctx.shadowColor='#000'; ctx.shadowBlur=3;
-    ctx.fillText(label, cx, dy+dispH*0.88);
-    ctx.restore();
-  }
-
-  // 굴뚝 연기
-  if(showSmoke){
-    ctx.save();
-    if(flipH){ ctx.translate(cx*2,0); ctx.scale(-1,1); }
-    ctx.globalAlpha=0.4; ctx.fillStyle='#dddddd';
-    for(let i=0;i<4;i++){
-      const t2=((frame*0.03+i/4)%1);
-      ctx.beginPath(); ctx.arc(cx-dispW*0.2-t2*20, dy+dispH*0.12-t2*22, 3+t2*4,0,Math.PI*2); ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  ctx.restore();
-  return true;
-}
-
 // ═══════════════════════════════════════════
-//  DRAW: PLAYER SHIP (이랜드크루즈)
+//  DRAW: PLAYER SHIP (이랜드크루즈) — canvas illustration
 // ═══════════════════════════════════════════
 function dPlayer(){
   const {x,y,w,h}=PL;
   ctx.save();
   if(invinc&&Math.floor(invT/5)%2===1) ctx.globalAlpha=0.22;
 
-  // 항적 (wake)
-  ctx.globalAlpha*=0.46; ctx.fillStyle='#b8ecff';
-  ctx.beginPath(); ctx.moveTo(x-w/2,y); ctx.lineTo(x-w/2-58,y-18);
-  ctx.lineTo(x-w/2-68,y); ctx.lineTo(x-w/2-58,y+18); ctx.closePath(); ctx.fill();
+  // wake
+  ctx.globalAlpha*=0.48; ctx.fillStyle='#b8ecff';
+  ctx.beginPath(); ctx.moveTo(x-w/2,y); ctx.lineTo(x-w/2-58,y-18); ctx.lineTo(x-w/2-68,y); ctx.lineTo(x-w/2-58,y+18); ctx.closePath(); ctx.fill();
   ctx.strokeStyle='#90d8f0'; ctx.lineWidth=1;
   for(let i=1;i<=4;i++){
-    ctx.globalAlpha=0.24/i;
-    ctx.beginPath(); ctx.moveTo(x-w/2-i*8,y-i*5); ctx.lineTo(x-w/2-i*8-22,y);
-    ctx.lineTo(x-w/2-i*8,y+i*5); ctx.stroke();
+    ctx.globalAlpha=0.25/i;
+    ctx.beginPath(); ctx.moveTo(x-w/2-i*8,y-i*5); ctx.lineTo(x-w/2-i*8-22,y); ctx.lineTo(x-w/2-i*8,y+i*5); ctx.stroke();
   }
   ctx.globalAlpha=invinc&&Math.floor(invT/5)%2===1?0.22:1;
 
-  // ★ 실사 사진 스프라이트
-  const drawn = drawShipPhoto(IMGS.boat1, x, y, w*2.0, false, '이랜드크루즈', true);
+  // hull
+  ctx.fillStyle='#f6f8ff';
+  ctx.beginPath();
+  ctx.moveTo(x-w/2,y-h/2+7);
+  ctx.lineTo(x+w/2-13,y-h/2+7);
+  ctx.bezierCurveTo(x+w/2+4,y-h/2+7,x+w/2+12,y-3,x+w/2+10,y+3);
+  ctx.lineTo(x+w/2+4,y+h/2-7); ctx.lineTo(x-w/2,y+h/2-7); ctx.closePath(); ctx.fill();
+  // waterline
+  ctx.fillStyle='#1a2e5c';
+  ctx.beginPath();
+  ctx.moveTo(x-w/2,y+3); ctx.lineTo(x+w/2-13,y+3);
+  ctx.bezierCurveTo(x+w/2+4,y+3,x+w/2+12,y+1,x+w/2+10,y+3);
+  ctx.lineTo(x+w/2+4,y+h/2-7); ctx.lineTo(x-w/2,y+h/2-7); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#0055bb'; ctx.fillRect(x-w/2,y-1,w*0.84,4);
 
-  if(!drawn){
-    // Canvas fallback
-    ctx.fillStyle='#f6f8ff';
-    ctx.beginPath();
-    ctx.moveTo(x-w/2,y-h/2+7); ctx.lineTo(x+w/2-13,y-h/2+7);
-    ctx.bezierCurveTo(x+w/2+4,y-h/2+7,x+w/2+12,y-3,x+w/2+10,y+3);
-    ctx.lineTo(x+w/2+4,y+h/2-7); ctx.lineTo(x-w/2,y+h/2-7); ctx.closePath(); ctx.fill();
-    ctx.fillStyle='#1a2e5c';
-    ctx.beginPath(); ctx.moveTo(x-w/2,y+3); ctx.lineTo(x+w/2-13,y+3);
-    ctx.bezierCurveTo(x+w/2+4,y+3,x+w/2+12,y+1,x+w/2+10,y+3);
-    ctx.lineTo(x+w/2+4,y+h/2-7); ctx.lineTo(x-w/2,y+h/2-7); ctx.closePath(); ctx.fill();
-    ctx.fillStyle='#edf2f8'; ctx.fillRect(x-w/2+5,y-h/2+7,w*0.74,h/2-5);
-    ctx.fillStyle='#ffffff'; ctx.fillRect(x-w/2+12,y-h/2-10,w*0.60,17);
-    ctx.fillStyle='#bbddf8';
-    for(let i=0;i<5;i++) ctx.fillRect(x-w/2+18+i*11,y-h/2-7,7,5);
-    ctx.fillStyle='#cc1a1a';
-    ctx.beginPath(); ctx.moveTo(x-w/2+28,y-h/2-10); ctx.lineTo(x-w/2+24,y-h/2-30);
-    ctx.lineTo(x-w/2+40,y-h/2-30); ctx.lineTo(x-w/2+36,y-h/2-10); ctx.closePath(); ctx.fill();
-    ctx.font='bold 6.5px sans-serif'; ctx.fillStyle='#003399'; ctx.textAlign='center';
-    ctx.fillText('이랜드크루즈',x+4,y+2); ctx.textAlign='left';
+  // lower cabin
+  ctx.fillStyle='#edf2f8'; ctx.fillRect(x-w/2+5,y-h/2+7,w*0.74,h/2-5);
+  ctx.fillStyle='#aaddff';
+  for(let i=0;i<7;i++) ctx.fillRect(x-w/2+10+i*11,y-h/2+10,7,6);
+  ctx.strokeStyle='#8899bb'; ctx.lineWidth=0.5;
+  for(let i=0;i<7;i++) ctx.strokeRect(x-w/2+10+i*11,y-h/2+10,7,6);
+  ctx.strokeStyle='#ccd4e0'; ctx.lineWidth=0.8;
+  ctx.beginPath(); ctx.moveTo(x-w/2+5,y-h/2+7); ctx.lineTo(x-w/2+5+w*0.74,y-h/2+7); ctx.stroke();
+
+  // upper cabin
+  ctx.fillStyle='#ffffff'; ctx.fillRect(x-w/2+12,y-h/2-10,w*0.60,18);
+  ctx.fillStyle='#bbddf8';
+  for(let i=0;i<5;i++) ctx.fillRect(x-w/2+18+i*11,y-h/2-7,7,5);
+  ctx.strokeStyle='#8899bb'; ctx.lineWidth=0.5;
+  for(let i=0;i<5;i++) ctx.strokeRect(x-w/2+18+i*11,y-h/2-7,7,5);
+  ctx.beginPath(); ctx.moveTo(x-w/2+12,y-h/2-11); ctx.lineTo(x-w/2+12+w*0.60,y-h/2-11); ctx.stroke();
+
+  // funnel
+  ctx.fillStyle='#cc1a1a';
+  ctx.beginPath(); ctx.moveTo(x-w/2+28,y-h/2-10); ctx.lineTo(x-w/2+24,y-h/2-30);
+  ctx.lineTo(x-w/2+40,y-h/2-30); ctx.lineTo(x-w/2+36,y-h/2-10); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#ee2222'; ctx.fillRect(x-w/2+22,y-h/2-35,20,6);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(x-w/2+24,y-h/2-20,16,3);
+
+  // 이랜드크루즈 text
+  ctx.font='bold 6.5px sans-serif'; ctx.fillStyle='#003399'; ctx.textAlign='center';
+  ctx.fillText('이랜드크루즈',x+4,y+2); ctx.textAlign='left';
+
+  // flag
+  ctx.fillStyle='#333'; ctx.fillRect(x+w/2-17,y-h/2-24,1.5,18);
+  ctx.fillStyle='#cc0000'; ctx.fillRect(x+w/2-16,y-h/2-24,12,7);
+  ctx.fillStyle='#0000cc'; ctx.fillRect(x+w/2-16,y-h/2-16,12,4);
+  ctx.fillStyle='#cc0000'; ctx.beginPath(); ctx.arc(x+w/2-10,y-h/2-20,2,0,Math.PI*2); ctx.fill();
+
+  // smoke
+  ctx.globalAlpha*=0.38; ctx.fillStyle='#cccccc';
+  for(let i=0;i<4;i++){
+    const t2=((frame*0.032+i/4)%1);
+    ctx.beginPath(); ctx.arc(x-w/2+32-t2*22,y-h/2-36-t2*20,3+t2*4,0,Math.PI*2); ctx.fill();
   }
   ctx.restore();
 }
 
 // ═══════════════════════════════════════════
-//  DRAW: ENEMY SHIPS — 실사 사진 사이드뷰 스프라이트
+//  DRAW: ENEMY SHIPS — canvas illustration
 // ═══════════════════════════════════════════
 function dShip(o){
-  // 항적
-  ctx.save();
-  ctx.globalAlpha=0.34; ctx.fillStyle='#aae8ff';
-  ctx.beginPath(); ctx.moveTo(o.x+o.w/2,o.y); ctx.lineTo(o.x+o.w/2+48,o.y-14);
-  ctx.lineTo(o.x+o.w/2+58,o.y); ctx.lineTo(o.x+o.w/2+48,o.y+14); ctx.closePath(); ctx.fill();
+  ctx.save(); ctx.translate(o.x,o.y);
+  const ow=o.w, oh=o.h;
+  // wake
+  ctx.globalAlpha=0.38; ctx.fillStyle='#aae8ff';
+  ctx.beginPath(); ctx.moveTo(ow/2,0); ctx.lineTo(ow/2+48,-14); ctx.lineTo(ow/2+58,0); ctx.lineTo(ow/2+48,14); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=0.22; ctx.strokeStyle='#80cce8'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(ow/2+22,-22); ctx.lineTo(-ow*0.38,-8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ow/2+22,22); ctx.lineTo(-ow*0.38,8); ctx.stroke();
+  ctx.globalAlpha=1;
+
+  ctx.fillStyle='#bb3300';
+  ctx.beginPath(); ctx.moveTo(-ow/2,-oh/2+5); ctx.lineTo(ow/2-11,-oh/2+5);
+  ctx.bezierCurveTo(ow/2+4,-oh/2+5,ow/2+10,-2,ow/2+8,2);
+  ctx.lineTo(ow/2+4,oh/2-5); ctx.lineTo(-ow/2,oh/2-5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#991e00';
+  ctx.beginPath(); ctx.moveTo(-ow/2,2); ctx.lineTo(ow/2-11,2); ctx.lineTo(ow/2+8,2); ctx.lineTo(ow/2+4,oh/2-5); ctx.lineTo(-ow/2,oh/2-5); ctx.closePath(); ctx.fill();
+
+  ctx.fillStyle='#eef3f8'; ctx.fillRect(-ow/2+5,-oh/2-13,ow*0.62,oh/2+9);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(-ow/2+14,-oh/2-23,ow*0.48,14);
+  ctx.fillStyle='#0044aa'; ctx.fillRect(-ow/2+5,-oh/2-1,ow*0.62,3);
+
+  ctx.fillStyle=`hsl(${o.hue||200},55%,68%)`;
+  for(let i=0;i<5;i++) ctx.fillRect(-ow/2+10+i*11,-oh/2-8,7,6);
+  ctx.fillStyle='#aaddff';
+  for(let i=0;i<4;i++) ctx.fillRect(-ow/2+18+i*10,-oh/2-20,6,5);
+  ctx.strokeStyle='#c8d4e0'; ctx.lineWidth=0.8;
+  ctx.beginPath(); ctx.moveTo(-ow/2+5,-oh/2-14); ctx.lineTo(-ow/2+5+ow*0.62,-oh/2-14); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-ow/2+14,-oh/2-24); ctx.lineTo(-ow/2+14+ow*0.48,-oh/2-24); ctx.stroke();
+
+  ctx.fillStyle='#cc3e00';
+  ctx.beginPath(); ctx.moveTo(-ow/2+18,-oh/2-13); ctx.lineTo(-ow/2+15,-oh/2-30); ctx.lineTo(-ow/2+29,-oh/2-30); ctx.lineTo(-ow/2+26,-oh/2-13); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#ee5500'; ctx.fillRect(-ow/2+13,-oh/2-34,18,5);
+  ctx.fillStyle='#ffaa00'; ctx.fillRect(-ow/2+15,-oh/2-22,14,3);
   ctx.restore();
-
-  // ★ 실사 사진 스프라이트 (좌우 반전: 적 선박은 왼쪽을 향함)
-  const drawn = drawShipPhoto(IMGS.boat2||IMGS.boat1, o.x, o.y, o.w*1.9, true, '한강유람선', false);
-
-  if(!drawn){
-    ctx.save(); ctx.translate(o.x,o.y);
-    const ow=o.w, oh=o.h;
-    ctx.fillStyle='#bb3300';
-    ctx.beginPath(); ctx.moveTo(-ow/2,-oh/2+5); ctx.lineTo(ow/2-11,-oh/2+5);
-    ctx.bezierCurveTo(ow/2+4,-oh/2+5,ow/2+10,-2,ow/2+8,2);
-    ctx.lineTo(ow/2+4,oh/2-5); ctx.lineTo(-ow/2,oh/2-5); ctx.closePath(); ctx.fill();
-    ctx.fillStyle='#eef3f8'; ctx.fillRect(-ow/2+5,-oh/2-13,ow*0.62,oh/2+9);
-    ctx.fillStyle='#cc3e00';
-    ctx.beginPath(); ctx.moveTo(-ow/2+18,-oh/2-13); ctx.lineTo(-ow/2+15,-oh/2-30);
-    ctx.lineTo(-ow/2+29,-oh/2-30); ctx.lineTo(-ow/2+26,-oh/2-13); ctx.closePath(); ctx.fill();
-    ctx.restore();
-  }
 }
 
 function dBigShip(o){
-  // 대형 항적
-  ctx.save();
-  ctx.globalAlpha=0.28; ctx.fillStyle='#c0eaff';
-  ctx.beginPath(); ctx.moveTo(o.x+o.w/2,o.y); ctx.lineTo(o.x+o.w/2+70,o.y-22);
-  ctx.lineTo(o.x+o.w/2+82,o.y); ctx.lineTo(o.x+o.w/2+70,o.y+22); ctx.closePath(); ctx.fill();
-  ctx.restore();
+  ctx.save(); ctx.translate(o.x,o.y);
+  const ow=o.w, oh=o.h;
+  ctx.globalAlpha=0.32; ctx.fillStyle='#c0eaff';
+  ctx.beginPath(); ctx.moveTo(ow/2,0); ctx.lineTo(ow/2+70,-22); ctx.lineTo(ow/2+82,0); ctx.lineTo(ow/2+70,22); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=1;
 
-  // ★ 실사 사진 스프라이트 (대형 — 더 넓게)
-  const drawn = drawShipPhoto(IMGS.boat2||IMGS.boat1, o.x, o.y, o.w*2.1, true, '대형유람선', true);
+  ctx.fillStyle='#7a4200';
+  ctx.beginPath(); ctx.moveTo(-ow/2,-oh/2+7); ctx.lineTo(ow/2-15,-oh/2+7);
+  ctx.bezierCurveTo(ow/2+8,-oh/2+7,ow/2+14,-2,ow/2+12,3);
+  ctx.lineTo(ow/2+6,oh/2-7); ctx.lineTo(-ow/2,oh/2-7); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#5a3000';
+  ctx.beginPath(); ctx.moveTo(-ow/2,3); ctx.lineTo(ow/2-15,3); ctx.lineTo(ow/2+12,3); ctx.lineTo(ow/2+6,oh/2-7); ctx.lineTo(-ow/2,oh/2-7); ctx.closePath(); ctx.fill();
 
-  if(!drawn){
-    ctx.save(); ctx.translate(o.x,o.y);
-    const ow=o.w, oh=o.h;
-    ctx.fillStyle='#7a4200';
-    ctx.beginPath(); ctx.moveTo(-ow/2,-oh/2+7); ctx.lineTo(ow/2-15,-oh/2+7);
-    ctx.bezierCurveTo(ow/2+8,-oh/2+7,ow/2+14,-2,ow/2+12,3);
-    ctx.lineTo(ow/2+6,oh/2-7); ctx.lineTo(-ow/2,oh/2-7); ctx.closePath(); ctx.fill();
-    ctx.fillStyle='rgba(238,238,238,0.82)'; ctx.fillRect(-ow/2+7,-oh/2-19,ow*0.70,oh/2+13);
-    ctx.font='bold 8px sans-serif'; ctx.fillStyle='#004488'; ctx.textAlign='center';
-    ctx.fillText('대형유람선',0,oh/2-10); ctx.textAlign='left';
-    ctx.restore();
+  ctx.fillStyle='#eeeeee'; ctx.fillRect(-ow/2+7,-oh/2-19,ow*0.70,oh/2+13);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(-ow/2+17,-oh/2-33,ow*0.55,18);
+  ctx.fillStyle='#f8f8f8'; ctx.fillRect(-ow/2+28,-oh/2-46,ow*0.38,16);
+
+  [[{sx:-ow/2+13,cnt:7,sp:11,y:-oh/2-11},{sx:-ow/2+21,cnt:5,sp:11,y:-oh/2-28},{sx:-ow/2+31,cnt:3,sp:11,y:-oh/2-42}],
+  ].flat().forEach((row,ri)=>{
+    ctx.fillStyle=['#88bbdd','#99ccee','#aaddff'][ri];
+    for(let i=0;i<row.cnt;i++) ctx.fillRect(row.sx+i*row.sp,row.y,7,5);
+  });
+
+  ctx.strokeStyle='#c8d0d8'; ctx.lineWidth=0.8;
+  ctx.beginPath(); ctx.moveTo(-ow/2+7,-oh/2-20); ctx.lineTo(-ow/2+7+ow*0.70,-oh/2-20); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-ow/2+17,-oh/2-34); ctx.lineTo(-ow/2+17+ow*0.55,-oh/2-34); ctx.stroke();
+
+  for(let fi=0;fi<2;fi++){
+    const fx=-ow/2+28+fi*40;
+    ctx.fillStyle='#880000';
+    ctx.beginPath(); ctx.moveTo(fx,-oh/2-19); ctx.lineTo(fx-5,-oh/2-38); ctx.lineTo(fx+12,-oh/2-38); ctx.lineTo(fx+7,-oh/2-19); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#aa0000'; ctx.fillRect(fx-7,-oh/2-42,21,6);
+    ctx.fillStyle='#ffcc00'; ctx.fillRect(fx-3,-oh/2-28,13,3);
   }
+  ctx.font='bold 8px sans-serif'; ctx.fillStyle='#004488'; ctx.textAlign='center';
+  ctx.fillText('한강유람선',0,oh/2-10); ctx.textAlign='left';
+  ctx.restore();
 }
 
 // ═══════════════════════════════════════════
